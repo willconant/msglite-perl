@@ -22,9 +22,23 @@ sub at_unix_socket {
 }
 
 sub ready {
-	my ($self, $on_addr, $timeout) = @_;
+	my ($self, $on_addrs, $timeout) = @_;
 	
-	$self->io_socket->print("READY\non $on_addr\ntimeout $timeout\n\n")
+	if (!ref($on_addrs)) {
+		$on_addrs = [$on_addrs];
+	}
+	elsif (ref($on_addrs) ne 'ARRAY') {
+		die "expected SCALAR or ARRAY for on_addrs";
+	}
+	
+	my $buf = "READY\n";
+	for (my $i = 0; $i < @$on_addrs; $i++) {
+		$buf .= "on$i $on_addrs->[$i]\n";
+	}
+	
+	$buf .= "timeout $timeout\n\n";
+	
+	$self->io_socket->print($buf)
 		|| die "error writing to socket: $!";
 		
 	return $self->_read_message;
