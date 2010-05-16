@@ -14,10 +14,9 @@ has 'reply_addr' => (
 	default => '',
 );
 
-has 'broadcast' => (
+has 'timeout' => (
 	is => 'ro',
-	isa => 'Bool',
-	default => '0',
+	isa => 'Int',
 );
 
 has 'body' => (

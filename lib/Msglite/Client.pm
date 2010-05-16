@@ -4,24 +4,36 @@ use Moose;
 use MooseX::SemiAffordanceAccessor;
 
 use Msglite::Message;
+use IO::Socket::UNIX;
 
 has 'io_socket' => (
 	is => 'ro',
 );
 
-sub ready {
-	my ($self, $on_addr) = @_;
+sub at_unix_socket {
+	my ($class, $path) = @_;
 	
-	$self->io_socket->print("READY\non $on_addr\n\n")
+	my $io_socket = IO::Socket::UNIX->new(
+		Peer => $path,
+		Type => SOCK_STREAM,
+		Timeout => 1) || die $!;
+	
+	return $class->new({io_socket => $io_socket});
+}
+
+sub ready {
+	my ($self, $on_addr, $timeout) = @_;
+	
+	$self->io_socket->print("READY\non $on_addr\ntimeout $timeout\n\n")
 		|| die "error writing to socket: $!";
 		
 	return $self->_read_message;
 }
 
-sub send_query {
-	my ($self, $to_addr, $body) = @_;
+sub query {
+	my ($self, $to_addr, $timeout, $body) = @_;
 	
-	my $buf = "QUERY\nto $to_addr\nbody " . length($body) . "\n\n$body\n";
+	my $buf = "QUERY\nto $to_addr\ntimeout $timeout\nbody " . length($body) . "\n\n$body\n";
 	
 	$self->io_socket->print($buf)
 		|| die "error writing to socket: $!";
@@ -29,7 +41,7 @@ sub send_query {
 	return $self->_read_message;
 }
 
-sub send_message {
+sub send {
 	my ($self, $msg) = @_;
 	
 	my $buf = "MESSAGE\n";
@@ -39,9 +51,7 @@ sub send_message {
 		$buf .= "reply " . $msg->reply_addr . "\n";
 	}
 	
-	if ($msg->broadcast) {
-		$buf .= "bcast 1\n";
-	}
+	$buf .= "timeout " . $msg->timeout . "\n";
 	
 	$buf .= "body " . length($msg->body) . "\n\n";
 	
@@ -80,10 +90,14 @@ sub _read_message {
 		$headers{$k} = $v;
 	}
 	
-	die "invalid format for body header" if ($headers{body} == 0);
+	die "missing body header" if !exists($headers{body});
+	die "invalid format for body header" if $headers{body} !~ m/^\d+$/;
 	
-	$self->io_socket->read(my $body, int($headers{body}))
-		|| die "error reading body of message: $!";
+	my $body = '';
+	if ($headers{body} > 0) {
+		$self->io_socket->read($body, int($headers{body}))
+			|| die "error reading body of message: $!";
+	}
 	
 	$self->io_socket->read(my $nl, 1)
 		|| die "error reading body of message: $!";
@@ -93,7 +107,7 @@ sub _read_message {
 	return Msglite::Message->new({
 		to_addr    => $headers{to},
 		reply_addr => "$headers{reply}",
-		broadcast  => $headers{bcast} eq '1',
+		timeout    => $headers{timeout},
 		body       => $body,
 	})
 }
