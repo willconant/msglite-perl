@@ -1,10 +1,18 @@
 package Msglite::Client;
 
 use Moose;
-use MooseX::SemiAffordanceAccessor;
 
 use Msglite::Message;
 use IO::Socket::UNIX;
+
+use constant {
+	READY_CMD     => '<',
+	MESSAGE_CMD   => '>',
+	QUERY_CMD     => '?',
+	TIMEOUT_CMD   => '*',
+	QUIT_CMD      => '.',
+	ERROR_CMD     => '-',	
+};
 
 has 'io_socket' => (
 	is => 'ro',
@@ -22,21 +30,9 @@ sub at_unix_socket {
 }
 
 sub ready {
-	my ($self, $on_addrs, $timeout) = @_;
+	my ($self, $timeout, @on_addrs) = @_;
 	
-	if (!ref($on_addrs)) {
-		$on_addrs = [$on_addrs];
-	}
-	elsif (ref($on_addrs) ne 'ARRAY') {
-		die "expected SCALAR or ARRAY for on_addrs";
-	}
-	
-	my $buf = "READY\n";
-	for (my $i = 0; $i < @$on_addrs; $i++) {
-		$buf .= "on$i $on_addrs->[$i]\n";
-	}
-	
-	$buf .= "timeout $timeout\n\n";
+	my $buf = join(' ', READY_CMD, $timeout, @on_addrs) . "\r\n";
 	
 	$self->io_socket->print($buf)
 		|| die "error writing to socket: $!";
@@ -44,10 +40,44 @@ sub ready {
 	return $self->_read_message;
 }
 
-sub query {
-	my ($self, $to_addr, $timeout, $body) = @_;
+sub send {
+	my ($self) = shift;
 	
-	my $buf = "QUERY\nto $to_addr\ntimeout $timeout\nbody " . length($body) . "\n\n$body\n";
+	my $msg;
+	if (!ref($_[0])) {
+		if (@_ < 3 || @_ > 4) {
+			die "wrong number of arguments to send";
+		}
+		my $reply_addr = @_ == 4 ? $_[3] : '';
+		$msg = Msglite::Message->new({
+			body       => $_[0],
+			timeout    => $_[1],
+			to_addr    => $_[2],
+			reply_addr => $reply_addr,
+		});
+	}
+	else {
+		$msg = $_[0];
+	}
+	
+	my $buf = join(' ', MESSAGE_CMD, length($msg->body), $msg->timeout, $msg->to_addr, $msg->reply_addr) . "\r\n";
+	
+	if (length($msg->body) > 0) {
+		$buf .= $msg->body . "\r\n";
+	}
+	
+	$self->io_socket->print($buf)
+		|| die "error writing to socket: $!";
+}
+
+sub query {
+	my ($self, $body, $timeout, $to_addr) = @_;
+	
+	my $buf = join(' ', QUERY_CMD, length($body), $timeout, $to_addr) . "\r\n";
+	
+	if (length($body) > 0) {
+		$buf .= $body . "\r\n";
+	}
 	
 	$self->io_socket->print($buf)
 		|| die "error writing to socket: $!";
@@ -55,75 +85,54 @@ sub query {
 	return $self->_read_message;
 }
 
-sub send {
-	my ($self, $msg) = @_;
-	
-	my $buf = "MESSAGE\n";
-	$buf .= "to " . $msg->to_addr . "\n";
-	
-	if ($msg->reply_addr ne '') {
-		$buf .= "reply " . $msg->reply_addr . "\n";
-	}
-	
-	$buf .= "timeout " . $msg->timeout . "\n";
-	
-	$buf .= "body " . length($msg->body) . "\n\n";
-	
-	$buf .= $msg->body . "\n";
-	
-	$self->io_socket->print($buf)
-		|| die "error writing to socket: $!";
-}
-
 sub quit {
 	my ($self) = @_;
 	
-	$self->io_socket->print("QUIT\n\n");
+	$self->io_socket->print(QUIT_CMD . "\r\n");
 	$self->io_socket->close;
 }
 
 sub _read_message {
 	my ($self) = @_;
 	
-	local $/ = "\n";
+	local $/ = "\r\n";
 	
 	my $cmd_line = $self->io_socket->getline;
-	die "unexpected line from msglite server" if ($cmd_line ne "MESSAGE\n");
+	chomp $cmd_line;
 	
-	my %headers = (
-		reply => '',
-		bcast => '0',
-	);
+	my @command = split /\s+/, $cmd_line;
 	
-	for (;;) {
-		my $header_line = $self->io_socket->getline;
-		chomp($header_line);
-		last if $header_line eq '';
-		
-		my ($k, $v) = split(/ /, $header_line, 2);
-		$headers{$k} = $v;
+	return undef if $command[0] eq TIMEOUT_CMD;
+	
+	die $cmd_line if $command[0] eq ERROR_CMD;
+	die "unexpected line from msglite server: $cmd_line" if $command[0] ne MESSAGE_CMD;
+	
+	if (@command < 4 || @command > 5) {
+		die "unexpected number of message params from msglite server: $cmd_line";
 	}
 	
-	die "missing body header" if !exists($headers{body});
-	die "invalid format for body header" if $headers{body} !~ m/^\d+$/;
+	my $reply_addr = @command == 5 ? $command[4] : '';
 	
 	my $body = '';
-	if ($headers{body} > 0) {
-		$self->io_socket->read($body, int($headers{body}))
+	if ($command[1] > 0) {
+		$self->io_socket->read($body, int($command[1]))
 			|| die "error reading body of message: $!";
+		
+		$self->io_socket->read(my $crlf, 2)
+			|| die "error reading body of message: $!";
+			
+		if ($crlf ne "\r\n") {
+			die "expected \\r\\n from msglite server after message body";
+		}
 	}
 	
-	$self->io_socket->read(my $nl, 1)
-		|| die "error reading body of message: $!";
-		
-	die "body must be followed by newline" if $nl ne "\n";
-	
 	return Msglite::Message->new({
-		to_addr    => $headers{to},
-		reply_addr => "$headers{reply}",
-		timeout    => $headers{timeout},
 		body       => $body,
+		timeout    => $command[2],
+		to_addr    => $command[3],
+		reply_addr => $reply_addr,
 	})
 }
 
-1;
+no Moose;
+__PACKAGE__->meta->make_immutable;

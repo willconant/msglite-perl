@@ -1,7 +1,6 @@
 package Msglite::Message;
 
 use Moose;
-use MooseX::SemiAffordanceAccessor;
 
 has 'to_addr' => (
 	is => 'ro',
