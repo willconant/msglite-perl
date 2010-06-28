@@ -1,0 +1,11 @@
+Changes
+MANIFEST
+Makefile.PL
+README
+lib/Msglite.pm
+lib/Msglite/Message.pm
+t/00-load.t
+t/manifest.t
+t/messages.t
+t/pod-coverage.t
+t/pod.t

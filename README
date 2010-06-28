@@ -1,0 +1,26 @@
+Msglite
+
+Perl client library for Msglite (http://github.com/willconant/msglite)
+
+INSTALLATION
+
+To install this module, run the following commands:
+
+	perl Makefile.PL
+	make
+	make test
+	make install
+
+
+SUPPORT AND DOCUMENTATION
+
+This project is hosted at http://github.com/willconant/msglite-perl
+
+Report bugs, find documentation, and submit patches there.
+
+
+LICENSE AND COPYRIGHT
+
+Copyright (c) 2010 William R. Conant, WillConant.com
+Use of this source code is governed by the MIT licence:
+http://www.opensource.org/licenses/mit-license.php
